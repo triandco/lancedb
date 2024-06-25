@@ -149,7 +149,7 @@ async fn index_non_floating_type_no_index() -> Result<()> {
     let record_batch = table
         .query()
         .limit(2)
-        .nearest_to_vec_type(&[1i8; 128], &DataType::Int8)?
+        .nearest_to(&[1f32; 128])?
         .column("vector")
         .execute()
         .await?
@@ -192,7 +192,7 @@ async fn index_non_floating_type_with_index() -> Result<()> {
     let record_batch = table
         .query()
         .limit(2)
-        .nearest_to_vec_type(&[1i8; 128], &DataType::Int8)?
+        .nearest_to(&[1f32; 128])?
         .column("vector")
         .execute()
         .await?

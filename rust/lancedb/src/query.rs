@@ -124,7 +124,7 @@ impl IntoQueryVector for Arc<dyn Array> {
         if data_type != self.data_type() {
             match data_type {
                 // If the embedding wants floating point data we can try and cast
-                DataType::Float16 | DataType::Float32 | DataType::Float64 | DataType::Int8 => {
+                DataType::Float16 | DataType::Float32 | DataType::Float64 => {
                     arrow_cast::cast(&self, data_type).map_err(|e| {
                         Error::InvalidInput {
                             message: format!(
@@ -260,28 +260,6 @@ impl IntoQueryVector for &[f64] {
     }
 }
 
-impl IntoQueryVector for &[i8] {
-    fn to_query_vector(
-        self,
-        data_type: &DataType,
-        embedding_model_label: &str,
-    ) -> Result<Arc<dyn Array>> {
-        match data_type {
-                DataType::Int8 => {
-                    let arr: Vec<_> = self.iter().map(|x| *x as f32).collect();
-                    Ok(Arc::new(Float32Array::from(arr)))
-                }
-                _ => Err(Error::InvalidInput {
-                    message: format!(
-                        "failed to create query vector, the input data type was &[i8] but the embedding model \"{}\" expected data type {:?}",
-                        embedding_model_label,
-                        data_type
-                    ),
-                }),
-            }
-    }
-}
-
 impl<const N: usize> IntoQueryVector for &[f16; N] {
     fn to_query_vector(
         self,
@@ -315,17 +293,6 @@ impl<const N: usize> IntoQueryVector for &[f64; N] {
     }
 }
 
-impl<const N: usize> IntoQueryVector for &[i8; N] {
-    fn to_query_vector(
-        self,
-        data_type: &DataType,
-        embedding_model_label: &str,
-    ) -> Result<Arc<dyn Array>> {
-        self.as_slice()
-            .to_query_vector(data_type, embedding_model_label)
-    }
-}
-
 impl IntoQueryVector for Vec<f16> {
     fn to_query_vector(
         self,
@@ -349,17 +316,6 @@ impl IntoQueryVector for Vec<f32> {
 }
 
 impl IntoQueryVector for Vec<f64> {
-    fn to_query_vector(
-        self,
-        data_type: &DataType,
-        embedding_model_label: &str,
-    ) -> Result<Arc<dyn Array>> {
-        self.as_slice()
-            .to_query_vector(data_type, embedding_model_label)
-    }
-}
-
-impl IntoQueryVector for Vec<i8> {
     fn to_query_vector(
         self,
         data_type: &DataType,
@@ -589,13 +545,6 @@ impl Query {
     pub fn nearest_to(self, vector: impl IntoQueryVector) -> Result<VectorQuery> {
         let mut vector_query = self.into_vector();
         let query_vector = vector.to_query_vector(&DataType::Float32, "default")?;
-        vector_query.query_vector = Some(query_vector);
-        Ok(vector_query)
-    }
-
-    pub fn nearest_to_vec_type(self, vector: impl IntoQueryVector, data_type:&DataType) -> Result<VectorQuery> {
-        let mut vector_query = self.into_vector();
-        let query_vector = vector.to_query_vector(data_type, "default")?;
         vector_query.query_vector = Some(query_vector);
         Ok(vector_query)
     }
