@@ -1047,7 +1047,7 @@ impl NativeTable {
 
     fn supported_vector_data_type(dtype: &DataType) -> bool {
         match dtype {
-            DataType::FixedSizeList(inner, _) => DataType::is_floating(inner.data_type()),
+            DataType::FixedSizeList(inner, _) => DataType::is_floating(inner.data_type()) || DataType::is_integer(inner.data_type()),
             _ => false,
         }
     }
@@ -1688,7 +1688,7 @@ impl TableInternal for NativeTable {
                 message: format!("Column {} not found in dataset schema", column),
             })?;
             if let arrow_schema::DataType::FixedSizeList(f, dim) = field.data_type() {
-                if !f.data_type().is_floating() {
+                if !f.data_type().is_floating() && !f.data_type().is_integer(){
                     return Err(Error::InvalidInput {
                         message: format!(
                             "The data type of the vector column '{}' is not a floating point type",
