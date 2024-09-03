@@ -17,6 +17,7 @@ import {
   Data,
   IntoVector,
   Schema,
+  TableLike,
   fromDataToBuffer,
   fromTableToBuffer,
   fromTableToStreamBuffer,
@@ -38,6 +39,9 @@ import {
   Table as _NativeTable,
 } from "./native";
 import { Query, VectorQuery } from "./query";
+import { sanitizeTable } from "./sanitize";
+import { IntoSql, toSQL } from "./util";
+export { IndexConfig } from "./native";
 
 /**
  * Options for adding data to a table.
@@ -80,6 +84,7 @@ export interface OptimizeOptions {
    * tbl.cleanupOlderVersions(new Date());
    */
   cleanupOlderThan: Date;
+  deleteUnverified: boolean;
 }
 
 /**
@@ -122,6 +127,34 @@ export abstract class Table {
   abstract add(data: Data, options?: Partial<AddDataOptions>): Promise<void>;
   /**
    * Update existing records in the Table
+   * @param opts.values The values to update. The keys are the column names and the values
+   * are the values to set.
+   * @example
+   * ```ts
+   * table.update({where:"x = 2", values:{"vector": [10, 10]}})
+   * ```
+   */
+  abstract update(
+    opts: {
+      values: Map<string, IntoSql> | Record<string, IntoSql>;
+    } & Partial<UpdateOptions>,
+  ): Promise<void>;
+  /**
+   * Update existing records in the Table
+   * @param opts.valuesSql The values to update. The keys are the column names and the values
+   * are the values to set. The values are SQL expressions.
+   * @example
+   * ```ts
+   * table.update({where:"x = 2", valuesSql:{"x": "x + 1"}})
+   * ```
+   */
+  abstract update(
+    opts: {
+      valuesSql: Map<string, string> | Record<string, string>;
+    } & Partial<UpdateOptions>,
+  ): Promise<void>;
+  /**
+   * Update existing records in the Table
    *
    * An update operation can be used to adjust existing values.  Use the
    * returned builder to specify which columns to update.  The new value
@@ -149,6 +182,7 @@ export abstract class Table {
     updates: Map<string, string> | Record<string, string>,
     options?: Partial<UpdateOptions>,
   ): Promise<void>;
+
   /** Count the total number of rows in the dataset. */
   abstract countRows(filter?: string): Promise<number>;
   /** Delete the rows that satisfy the predicate. */
@@ -237,19 +271,23 @@ export abstract class Table {
    * @returns {Query} A builder that can be used to parameterize the query
    */
   abstract query(): Query;
+
   /**
    * Create a search query to find the nearest neighbors
-   * of the given query vector
-   * @param {string} query - the query. This will be converted to a vector using the table's provided embedding function
-   * @rejects {Error} If no embedding functions are defined in the table
+   * of the given query
+   * @param {string | IntoVector} query - the query, a vector or string
+   * @param {string} queryType - the type of the query, "vector", "fts", or "auto"
+   * @param {string | string[]} ftsColumns - the columns to search in for full text search
+   *    for now, only one column can be searched at a time.
+   *
+   * when "auto" is used, if the query is a string and an embedding function is defined, it will be treated as a vector query
+   * if the query is a string and no embedding function is defined, it will be treated as a full text search query
    */
-  abstract search(query: string): Promise<VectorQuery>;
-  /**
-   * Create a search query to find the nearest neighbors
-   * of the given query vector
-   * @param {IntoVector} query - the query vector
-   */
-  abstract search(query: IntoVector): VectorQuery;
+  abstract search(
+    query: string | IntoVector,
+    queryType?: string,
+    ftsColumns?: string | string[],
+  ): VectorQuery | Query;
   /**
    * Search the table with a given query vector.
    *
@@ -381,8 +419,7 @@ export abstract class Table {
   abstract indexStats(name: string): Promise<IndexStatistics | undefined>;
 
   static async parseTableData(
-    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-    data: Record<string, unknown>[] | ArrowTable<any>,
+    data: Record<string, unknown>[] | TableLike,
     options?: Partial<CreateTableOptions>,
     streaming = false,
   ) {
@@ -395,9 +432,9 @@ export abstract class Table {
 
     let table: ArrowTable;
     if (isArrowTable(data)) {
-      table = data;
+      table = sanitizeTable(data);
     } else {
-      table = makeArrowTable(data, options);
+      table = makeArrowTable(data as Record<string, unknown>[], options);
     }
     if (streaming) {
       const buf = await fromTableToStreamBuffer(
@@ -458,7 +495,7 @@ export class LocalTable extends Table {
     const mode = options?.mode ?? "append";
     const schema = await this.schema();
     const registry = getRegistry();
-    const functions = registry.parseFunctions(schema.metadata);
+    const functions = await registry.parseFunctions(schema.metadata);
 
     const buffer = await fromDataToBuffer(
       data,
@@ -469,17 +506,63 @@ export class LocalTable extends Table {
   }
 
   async update(
-    updates: Map<string, string> | Record<string, string>,
+    optsOrUpdates:
+      | (Map<string, string> | Record<string, string>)
+      | ({
+          values: Map<string, IntoSql> | Record<string, IntoSql>;
+        } & Partial<UpdateOptions>)
+      | ({
+          valuesSql: Map<string, string> | Record<string, string>;
+        } & Partial<UpdateOptions>),
     options?: Partial<UpdateOptions>,
   ) {
-    const onlyIf = options?.where;
+    const isValues =
+      "values" in optsOrUpdates && typeof optsOrUpdates.values !== "string";
+    const isValuesSql =
+      "valuesSql" in optsOrUpdates &&
+      typeof optsOrUpdates.valuesSql !== "string";
+    const isMap = (obj: unknown): obj is Map<string, string> => {
+      return obj instanceof Map;
+    };
+
+    let predicate;
     let columns: [string, string][];
-    if (updates instanceof Map) {
-      columns = Array.from(updates.entries());
-    } else {
-      columns = Object.entries(updates);
+    switch (true) {
+      case isMap(optsOrUpdates):
+        columns = Array.from(optsOrUpdates.entries());
+        predicate = options?.where;
+        break;
+      case isValues && isMap(optsOrUpdates.values):
+        columns = Array.from(optsOrUpdates.values.entries()).map(([k, v]) => [
+          k,
+          toSQL(v),
+        ]);
+        predicate = optsOrUpdates.where;
+        break;
+      case isValues && !isMap(optsOrUpdates.values):
+        columns = Object.entries(optsOrUpdates.values).map(([k, v]) => [
+          k,
+          toSQL(v),
+        ]);
+        predicate = optsOrUpdates.where;
+        break;
+
+      case isValuesSql && isMap(optsOrUpdates.valuesSql):
+        columns = Array.from(optsOrUpdates.valuesSql.entries());
+        predicate = optsOrUpdates.where;
+        break;
+      case isValuesSql && !isMap(optsOrUpdates.valuesSql):
+        columns = Object.entries(optsOrUpdates.valuesSql).map(([k, v]) => [
+          k,
+          v,
+        ]);
+        predicate = optsOrUpdates.where;
+        break;
+      default:
+        columns = Object.entries(optsOrUpdates as Record<string, string>);
+        predicate = options?.where;
     }
-    await this.inner.update(onlyIf, columns);
+    await this.inner.update(predicate, columns);
   }
 
   async countRows(filter?: string): Promise<number> {
@@ -501,14 +584,35 @@ export class LocalTable extends Table {
     return new Query(this.inner);
   }
 
-  search(query: string): Promise<VectorQuery>;
-
-  search(query: IntoVector): VectorQuery;
-  search(query: string | IntoVector): Promise<VectorQuery> | VectorQuery {
+  search(
+    query: string | IntoVector,
+    queryType: string = "auto",
+    ftsColumns?: string | string[],
+  ): VectorQuery | Query {
     if (typeof query !== "string") {
+      if (queryType === "fts") {
+        throw new Error("Cannot perform full text search on a vector query");
+      }
       return this.vectorSearch(query);
-    } else {
-      return this.getEmbeddingFunctions().then(async (functions) => {
+    }
+
+    // If the query is a string, we need to determine if it is a vector query or a full text search query
+    if (queryType === "fts") {
+      return this.query().fullTextSearch(query, {
+        columns: ftsColumns,
+      });
+    }
+
+    // The query type is auto or vector
+    // fall back to full text search if no embedding functions are defined and the query is a string
+    if (queryType === "auto" && getRegistry().length() === 0) {
+      return this.query().fullTextSearch(query, {
+        columns: ftsColumns,
+      });
+    }
+
+    const queryPromise = this.getEmbeddingFunctions().then(
+      async (functions) => {
         // TODO: Support multiple embedding functions
         const embeddingFunc: EmbeddingFunctionConfig | undefined = functions
           .values()
@@ -518,11 +622,11 @@ export class LocalTable extends Table {
             new Error("No embedding functions are defined in the table"),
           );
         }
-        const embeddings =
-          await embeddingFunc.function.computeQueryEmbeddings(query);
-        return this.query().nearestTo(embeddings);
-      });
-    }
+        return await embeddingFunc.function.computeQueryEmbeddings(query);
+      },
+    );
+
+    return this.query().nearestTo(queryPromise);
   }
 
   vectorSearch(vector: IntoVector): VectorQuery {
@@ -568,7 +672,10 @@ export class LocalTable extends Table {
       cleanupOlderThanMs =
         new Date().getTime() - options.cleanupOlderThan.getTime();
     }
-    return await this.inner.optimize(cleanupOlderThanMs);
+    return await this.inner.optimize(
+      cleanupOlderThanMs,
+      options?.deleteUnverified,
+    );
   }
 
   async listIndices(): Promise<IndexConfig[]> {

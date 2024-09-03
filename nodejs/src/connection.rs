@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use napi::bindgen_prelude::*;
 use napi_derive::*;
 
 use crate::table::Table;
 use crate::ConnectionOptions;
-use lancedb::connection::{ConnectBuilder, Connection as LanceDBConnection, CreateTableMode};
+use lancedb::connection::{
+    ConnectBuilder, Connection as LanceDBConnection, CreateTableMode, LanceFileVersion,
+};
 use lancedb::ipc::{ipc_file_to_batches, ipc_file_to_schema};
 
 #[napi]
@@ -89,7 +92,7 @@ impl Connection {
     }
 
     /// List all tables in the dataset.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn table_names(
         &self,
         start_after: Option<String>,
@@ -113,14 +116,14 @@ impl Connection {
     /// - name: The name of the table.
     /// - buf: The buffer containing the IPC file.
     ///
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create_table(
         &self,
         name: String,
         buf: Buffer,
         mode: String,
         storage_options: Option<HashMap<String, String>>,
-        use_legacy_format: Option<bool>,
+        data_storage_options: Option<String>,
     ) -> napi::Result<Table> {
         let batches = ipc_file_to_batches(buf.to_vec())
             .map_err(|e| napi::Error::from_reason(format!("Failed to read IPC file: {}", e)))?;
@@ -131,8 +134,11 @@ impl Connection {
                 builder = builder.storage_option(key, value);
             }
         }
-        if let Some(use_legacy_format) = use_legacy_format {
-            builder = builder.use_legacy_format(use_legacy_format);
+        if let Some(data_storage_option) = data_storage_options.as_ref() {
+            builder = builder.data_storage_version(
+                LanceFileVersion::from_str(data_storage_option)
+                    .map_err(|e| napi::Error::from_reason(format!("{}", e)))?,
+            );
         }
         let tbl = builder
             .execute()
@@ -141,14 +147,14 @@ impl Connection {
         Ok(Table::new(tbl))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn create_empty_table(
         &self,
         name: String,
         schema_buf: Buffer,
         mode: String,
         storage_options: Option<HashMap<String, String>>,
-        use_legacy_format: Option<bool>,
+        data_storage_options: Option<String>,
     ) -> napi::Result<Table> {
         let schema = ipc_file_to_schema(schema_buf.to_vec()).map_err(|e| {
             napi::Error::from_reason(format!("Failed to marshal schema from JS to Rust: {}", e))
@@ -163,8 +169,11 @@ impl Connection {
                 builder = builder.storage_option(key, value);
             }
         }
-        if let Some(use_legacy_format) = use_legacy_format {
-            builder = builder.use_legacy_format(use_legacy_format);
+        if let Some(data_storage_option) = data_storage_options.as_ref() {
+            builder = builder.data_storage_version(
+                LanceFileVersion::from_str(data_storage_option)
+                    .map_err(|e| napi::Error::from_reason(format!("{}", e)))?,
+            );
         }
         let tbl = builder
             .execute()
@@ -173,7 +182,7 @@ impl Connection {
         Ok(Table::new(tbl))
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn open_table(
         &self,
         name: String,
@@ -197,7 +206,7 @@ impl Connection {
     }
 
     /// Drop table with the name. Or raise an error if the table does not exist.
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn drop_table(&self, name: String) -> napi::Result<()> {
         self.get_inner()?
             .drop_table(&name)

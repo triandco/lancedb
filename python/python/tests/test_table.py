@@ -1,15 +1,5 @@
-#  Copyright 2023 LanceDB Developers
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright The Lance Authors
 
 import functools
 from copy import copy
@@ -18,6 +8,7 @@ from pathlib import Path
 from time import sleep
 from typing import List
 from unittest.mock import PropertyMock, patch
+import os
 
 import lance
 import lancedb
@@ -37,7 +28,7 @@ from pydantic import BaseModel
 
 class MockDB:
     def __init__(self, uri: Path):
-        self.uri = uri
+        self.uri = str(uri)
         self.read_consistency_interval = None
 
     @functools.cached_property
@@ -499,6 +490,7 @@ def test_update_types(db):
                 "date": date(2021, 1, 1),
                 "vector1": [1.0, 0.0],
                 "vector2": [1.0, 1.0],
+                "binary": b"abc",
             }
         ],
     )
@@ -512,6 +504,7 @@ def test_update_types(db):
             date="DATE '2021-01-02'",
             vector1="[2.0, 2.0]",
             vector2="[3.0, 3.0]",
+            binary="X'646566'",
         )
     )
     actual = table.to_arrow().to_pylist()[0]
@@ -523,6 +516,7 @@ def test_update_types(db):
         date=date(2021, 1, 2),
         vector1=[2.0, 2.0],
         vector2=[3.0, 3.0],
+        binary=b"def",
     )
     assert actual == expected
 
@@ -536,6 +530,7 @@ def test_update_types(db):
             date=date(2021, 1, 3),
             vector1=[3.0, 3.0],
             vector2=np.array([4.0, 4.0]),
+            binary=b"def",
         )
     )
     actual = table.to_arrow().to_pylist()[0]
@@ -547,6 +542,7 @@ def test_update_types(db):
         date=date(2021, 1, 3),
         vector1=[3.0, 3.0],
         vector2=[4.0, 4.0],
+        binary=b"def",
     )
     assert actual == expected
 
@@ -735,7 +731,7 @@ def test_create_scalar_index(db):
     indices = table.to_lance().list_indices()
     assert len(indices) == 1
     scalar_index = indices[0]
-    assert scalar_index["type"] == "Scalar"
+    assert scalar_index["type"] == "BTree"
 
     # Confirm that prefiltering still works with the scalar index column
     results = table.search().where("x = 'c'").to_arrow()
@@ -1039,6 +1035,12 @@ async def test_optimize(db_async: AsyncConnection):
         ],
     )
     stats = await table.optimize()
+    expected = (
+        "OptimizeStats(compaction=CompactionStats { fragments_removed: 2, "
+        "fragments_added: 1, files_removed: 2, files_added: 1 }, "
+        "prune=RemovalStats { bytes_removed: 0, old_versions_removed: 0 })"
+    )
+    assert str(stats) == expected
     assert stats.compaction.files_removed == 2
     assert stats.compaction.files_added == 1
     assert stats.compaction.fragments_added == 1
@@ -1051,3 +1053,25 @@ async def test_optimize(db_async: AsyncConnection):
     assert stats.prune.old_versions_removed == 3
 
     assert await table.query().to_arrow() == pa.table({"x": [[1], [2]]})
+
+
+@pytest.mark.asyncio
+async def test_optimize_delete_unverified(db_async: AsyncConnection, tmp_path):
+    table = await db_async.create_table(
+        "test",
+        data=[{"x": [1]}],
+    )
+    await table.add(
+        data=[
+            {"x": [2]},
+        ],
+    )
+    version = await table.version()
+    path = tmp_path / "test.lance" / "_versions" / f"{version - 1}.manifest"
+    os.remove(path)
+    stats = await table.optimize(delete_unverified=False)
+    assert stats.prune.old_versions_removed == 0
+    stats = await table.optimize(
+        cleanup_older_than=timedelta(seconds=0), delete_unverified=True
+    )
+    assert stats.prune.old_versions_removed == 2

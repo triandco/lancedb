@@ -1,26 +1,15 @@
-// Copyright 2024 Lance Developers.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use arrow::{datatypes::Schema, ffi_stream::ArrowArrayStreamReader, pyarrow::FromPyArrow};
-use lancedb::connection::{Connection as LanceConnection, CreateTableMode};
+use lancedb::connection::{Connection as LanceConnection, CreateTableMode, LanceFileVersion};
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
-    pyclass, pyfunction, pymethods, PyAny, PyRef, PyResult, Python,
+    pyclass, pyfunction, pymethods, Bound, PyAny, PyRef, PyResult, Python,
 };
-use pyo3_asyncio::tokio::future_into_py;
+use pyo3_asyncio_0_21::tokio::future_into_py;
 
 use crate::{error::PythonErrorExt, table::Table};
 
@@ -73,7 +62,7 @@ impl Connection {
         self_: PyRef<'_, Self>,
         start_after: Option<String>,
         limit: Option<u32>,
-    ) -> PyResult<&PyAny> {
+    ) -> PyResult<Bound<'_, PyAny>> {
         let inner = self_.get_inner()?.clone();
         let mut op = inner.table_names();
         if let Some(start_after) = start_after {
@@ -89,23 +78,26 @@ impl Connection {
         self_: PyRef<'a, Self>,
         name: String,
         mode: &str,
-        data: &PyAny,
+        data: Bound<'_, PyAny>,
         storage_options: Option<HashMap<String, String>>,
-        use_legacy_format: Option<bool>,
-    ) -> PyResult<&'a PyAny> {
+        data_storage_version: Option<String>,
+    ) -> PyResult<Bound<'a, PyAny>> {
         let inner = self_.get_inner()?.clone();
 
         let mode = Self::parse_create_mode_str(mode)?;
 
-        let batches = ArrowArrayStreamReader::from_pyarrow(data)?;
+        let batches = ArrowArrayStreamReader::from_pyarrow_bound(&data)?;
         let mut builder = inner.create_table(name, batches).mode(mode);
 
         if let Some(storage_options) = storage_options {
             builder = builder.storage_options(storage_options);
         }
 
-        if let Some(use_legacy_format) = use_legacy_format {
-            builder = builder.use_legacy_format(use_legacy_format);
+        if let Some(data_storage_version) = data_storage_version.as_ref() {
+            builder = builder.data_storage_version(
+                LanceFileVersion::from_str(data_storage_version)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            );
         }
 
         future_into_py(self_.py(), async move {
@@ -118,15 +110,15 @@ impl Connection {
         self_: PyRef<'a, Self>,
         name: String,
         mode: &str,
-        schema: &PyAny,
+        schema: Bound<'_, PyAny>,
         storage_options: Option<HashMap<String, String>>,
-        use_legacy_format: Option<bool>,
-    ) -> PyResult<&'a PyAny> {
+        data_storage_version: Option<String>,
+    ) -> PyResult<Bound<'a, PyAny>> {
         let inner = self_.get_inner()?.clone();
 
         let mode = Self::parse_create_mode_str(mode)?;
 
-        let schema = Schema::from_pyarrow(schema)?;
+        let schema = Schema::from_pyarrow_bound(&schema)?;
 
         let mut builder = inner.create_empty_table(name, Arc::new(schema)).mode(mode);
 
@@ -134,8 +126,11 @@ impl Connection {
             builder = builder.storage_options(storage_options);
         }
 
-        if let Some(use_legacy_format) = use_legacy_format {
-            builder = builder.use_legacy_format(use_legacy_format);
+        if let Some(data_storage_version) = data_storage_version.as_ref() {
+            builder = builder.data_storage_version(
+                LanceFileVersion::from_str(data_storage_version)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            );
         }
 
         future_into_py(self_.py(), async move {
@@ -150,7 +145,7 @@ impl Connection {
         name: String,
         storage_options: Option<HashMap<String, String>>,
         index_cache_size: Option<u32>,
-    ) -> PyResult<&PyAny> {
+    ) -> PyResult<Bound<'_, PyAny>> {
         let inner = self_.get_inner()?.clone();
         let mut builder = inner.open_table(name);
         if let Some(storage_options) = storage_options {
@@ -165,14 +160,14 @@ impl Connection {
         })
     }
 
-    pub fn drop_table(self_: PyRef<'_, Self>, name: String) -> PyResult<&PyAny> {
+    pub fn drop_table(self_: PyRef<'_, Self>, name: String) -> PyResult<Bound<'_, PyAny>> {
         let inner = self_.get_inner()?.clone();
         future_into_py(self_.py(), async move {
             inner.drop_table(name).await.infer_error()
         })
     }
 
-    pub fn drop_db(self_: PyRef<'_, Self>) -> PyResult<&PyAny> {
+    pub fn drop_db(self_: PyRef<'_, Self>) -> PyResult<Bound<'_, PyAny>> {
         let inner = self_.get_inner()?.clone();
         future_into_py(
             self_.py(),
@@ -190,7 +185,7 @@ pub fn connect(
     host_override: Option<String>,
     read_consistency_interval: Option<f64>,
     storage_options: Option<HashMap<String, String>>,
-) -> PyResult<&PyAny> {
+) -> PyResult<Bound<'_, PyAny>> {
     future_into_py(py, async move {
         let mut builder = lancedb::connect(&uri);
         if let Some(api_key) = api_key {

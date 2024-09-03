@@ -117,6 +117,18 @@ def test_query_builder(table):
     assert all(np.array(rs[0]["vector"]) == [1, 2])
 
 
+def test_vector_query_with_no_limit(table):
+    with pytest.raises(ValueError):
+        LanceVectorQueryBuilder(table, [0, 0], "vector").limit(0).select(
+            ["id", "vector"]
+        ).to_list()
+
+    with pytest.raises(ValueError):
+        LanceVectorQueryBuilder(table, [0, 0], "vector").limit(None).select(
+            ["id", "vector"]
+        ).to_list()
+
+
 def test_query_builder_batches(table):
     rs = (
         LanceVectorQueryBuilder(table, [0, 0], "vector")
@@ -333,3 +345,32 @@ async def test_query_to_pandas_async(table_async: AsyncTable):
 
     df = await table_async.query().where("id < 0").to_pandas()
     assert df.shape == (0, 4)
+
+
+def test_explain_plan(table):
+    q = LanceVectorQueryBuilder(table, [0, 0], "vector")
+    plan = q.explain_plan(verbose=True)
+    assert "KNN" in plan
+
+
+@pytest.mark.asyncio
+async def test_explain_plan_async(table_async: AsyncTable):
+    plan = await table_async.query().nearest_to(pa.array([1, 2])).explain_plan(True)
+    assert "KNN" in plan
+
+
+@pytest.mark.asyncio
+async def test_query_camelcase_async(tmp_path):
+    db = await lancedb.connect_async(tmp_path)
+    table = await db.create_table("test", pa.table({"camelCase": pa.array([1, 2])}))
+
+    result = await table.query().select(["camelCase"]).to_arrow()
+    assert result == pa.table({"camelCase": pa.array([1, 2])})
+
+
+@pytest.mark.asyncio
+async def test_query_to_list_async(table_async: AsyncTable):
+    list = await table_async.query().to_list()
+    assert len(list) == 2
+    assert list[0]["vector"] == [1, 2]
+    assert list[1]["vector"] == [3, 4]

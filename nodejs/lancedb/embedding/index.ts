@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataType, Field, Schema } from "../arrow";
-import { isDataType } from "../arrow";
+import { Field, Schema } from "../arrow";
 import { sanitizeType } from "../sanitize";
 import { EmbeddingFunction } from "./embedding_function";
 import { EmbeddingFunctionConfig, getRegistry } from "./registry";
 
-export { EmbeddingFunction } from "./embedding_function";
+export { EmbeddingFunction, TextEmbeddingFunction } from "./embedding_function";
 
 // We need to explicitly export '*' so that the `register` decorator actually registers the class.
 export * from "./openai";
+export * from "./transformers";
 export * from "./registry";
 
 /**
@@ -56,15 +56,15 @@ export function LanceSchema(
     Partial<EmbeddingFunctionConfig>
   >();
   Object.entries(fields).forEach(([key, value]) => {
-    if (isDataType(value)) {
-      arrowFields.push(new Field(key, sanitizeType(value), true));
-    } else {
+    if (Array.isArray(value)) {
       const [dtype, metadata] = value as [
         object,
         Map<string, EmbeddingFunction>,
       ];
       arrowFields.push(new Field(key, sanitizeType(dtype), true));
       parseEmbeddingFunctions(embeddingFunctions, key, metadata);
+    } else {
+      arrowFields.push(new Field(key, sanitizeType(value), true));
     }
   });
   const registry = getRegistry();

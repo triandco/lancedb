@@ -22,7 +22,8 @@ import pytest
 from lancedb.pydantic import LanceModel, Vector
 
 
-def test_basic(tmp_path):
+@pytest.mark.parametrize("use_tantivy", [True, False])
+def test_basic(tmp_path, use_tantivy):
     db = lancedb.connect(tmp_path)
 
     assert db.uri == str(tmp_path)
@@ -55,7 +56,7 @@ def test_basic(tmp_path):
     assert len(rs) == 1
     assert rs["item"].iloc[0] == "foo"
 
-    table.create_fts_index(["item"])
+    table.create_fts_index("item", use_tantivy=use_tantivy)
     rs = table.search("bar", query_type="fts").to_pandas()
     assert len(rs) == 1
     assert rs["item"].iloc[0] == "bar"
@@ -551,6 +552,12 @@ async def test_create_in_v2_mode(tmp_path):
     await tbl.add(make_table())
 
     assert await is_in_v2_mode(tbl)
+
+    # Create empty table uses v1 mode by default
+    tbl = await db.create_table("test_empty_v2_default", data=None, schema=schema)
+    await tbl.add(make_table())
+
+    assert not await is_in_v2_mode(tbl)
 
 
 def test_replace_index(tmp_path):

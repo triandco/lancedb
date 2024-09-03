@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use lancedb::index::scalar::FullTextSearchQuery;
 use lancedb::query::ExecutableQuery;
 use lancedb::query::Query as LanceDbQuery;
 use lancedb::query::QueryBase;
@@ -43,8 +44,19 @@ impl Query {
     }
 
     #[napi]
+    pub fn full_text_search(&mut self, query: String, columns: Option<Vec<String>>) {
+        let query = FullTextSearchQuery::new(query).columns(columns);
+        self.inner = self.inner.clone().full_text_search(query);
+    }
+
+    #[napi]
     pub fn select(&mut self, columns: Vec<(String, String)>) {
         self.inner = self.inner.clone().select(Select::dynamic(&columns));
+    }
+
+    #[napi]
+    pub fn select_columns(&mut self, columns: Vec<String>) {
+        self.inner = self.inner.clone().select(Select::columns(&columns));
     }
 
     #[napi]
@@ -62,7 +74,7 @@ impl Query {
         Ok(VectorQuery { inner })
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn execute(
         &self,
         max_batch_length: Option<u32>,
@@ -79,6 +91,13 @@ impl Query {
                 napi::Error::from_reason(format!("Failed to execute query stream: {}", e))
             })?;
         Ok(RecordBatchIterator::new(inner_stream))
+    }
+
+    #[napi]
+    pub async fn explain_plan(&self, verbose: bool) -> napi::Result<String> {
+        self.inner.explain_plan(verbose).await.map_err(|e| {
+            napi::Error::from_reason(format!("Failed to retrieve the query plan: {}", e))
+        })
     }
 }
 
@@ -127,8 +146,19 @@ impl VectorQuery {
     }
 
     #[napi]
+    pub fn full_text_search(&mut self, query: String, columns: Option<Vec<String>>) {
+        let query = FullTextSearchQuery::new(query).columns(columns);
+        self.inner = self.inner.clone().full_text_search(query);
+    }
+
+    #[napi]
     pub fn select(&mut self, columns: Vec<(String, String)>) {
         self.inner = self.inner.clone().select(Select::dynamic(&columns));
+    }
+
+    #[napi]
+    pub fn select_columns(&mut self, columns: Vec<String>) {
+        self.inner = self.inner.clone().select(Select::columns(&columns));
     }
 
     #[napi]
@@ -136,7 +166,7 @@ impl VectorQuery {
         self.inner = self.inner.clone().limit(limit as usize);
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub async fn execute(
         &self,
         max_batch_length: Option<u32>,
@@ -153,5 +183,12 @@ impl VectorQuery {
                 napi::Error::from_reason(format!("Failed to execute query stream: {}", e))
             })?;
         Ok(RecordBatchIterator::new(inner_stream))
+    }
+
+    #[napi]
+    pub async fn explain_plan(&self, verbose: bool) -> napi::Result<String> {
+        self.inner.explain_plan(verbose).await.map_err(|e| {
+            napi::Error::from_reason(format!("Failed to retrieve the query plan: {}", e))
+        })
     }
 }

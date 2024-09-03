@@ -49,6 +49,7 @@ class RemoteDBConnection(DBConnection):
         parsed = urlparse(db_url)
         if parsed.scheme != "db":
             raise ValueError(f"Invalid scheme: {parsed.scheme}, only accepts db://")
+        self._uri = str(db_url)
         self.db_name = parsed.netloc
         self.api_key = api_key
         self._client = RestfulLanceDBClient(
@@ -245,7 +246,7 @@ class RemoteDBConnection(DBConnection):
             schema = schema.to_arrow_schema()
 
         if data is not None:
-            data = _sanitize_data(
+            data, schema = _sanitize_data(
                 data,
                 schema,
                 metadata=None,

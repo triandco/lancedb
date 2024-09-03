@@ -16,8 +16,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as tmp from "tmp";
 
-import * as arrow from "apache-arrow";
-import * as arrowOld from "apache-arrow-old";
+import * as arrow13 from "apache-arrow-13";
+import * as arrow14 from "apache-arrow-14";
+import * as arrow15 from "apache-arrow-15";
+import * as arrow16 from "apache-arrow-16";
+import * as arrow17 from "apache-arrow-17";
 
 import { Table, connect } from "../lancedb";
 import {
@@ -28,109 +31,168 @@ import {
   Float64,
   Int32,
   Int64,
+  List,
   Schema,
+  Utf8,
   makeArrowTable,
 } from "../lancedb/arrow";
-import { EmbeddingFunction, LanceSchema, register } from "../lancedb/embedding";
+import {
+  EmbeddingFunction,
+  LanceSchema,
+  getRegistry,
+  register,
+} from "../lancedb/embedding";
 import { Index } from "../lancedb/indices";
 
-// biome-ignore lint/suspicious/noExplicitAny: <explanation>
-describe.each([arrow, arrowOld])("Given a table", (arrow: any) => {
-  let tmpDir: tmp.DirResult;
-  let table: Table;
+describe.each([arrow13, arrow14, arrow15, arrow16, arrow17])(
+  "Given a table",
+  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+  (arrow: any) => {
+    let tmpDir: tmp.DirResult;
+    let table: Table;
 
-  const schema = new arrow.Schema([
-    new arrow.Field("id", new arrow.Float64(), true),
-  ]);
+    const schema:
+      | import("apache-arrow-13").Schema
+      | import("apache-arrow-14").Schema
+      | import("apache-arrow-15").Schema
+      | import("apache-arrow-16").Schema
+      | import("apache-arrow-17").Schema = new arrow.Schema([
+      new arrow.Field("id", new arrow.Float64(), true),
+    ]);
 
-  beforeEach(async () => {
-    tmpDir = tmp.dirSync({ unsafeCleanup: true });
-    const conn = await connect(tmpDir.name);
-    table = await conn.createEmptyTable("some_table", schema);
-  });
-  afterEach(() => tmpDir.removeCallback());
-
-  it("be displayable", async () => {
-    expect(table.display()).toMatch(
-      /NativeTable\(some_table, uri=.*, read_consistency_interval=None\)/,
-    );
-    table.close();
-    expect(table.display()).toBe("ClosedTable(some_table)");
-  });
-
-  it("should let me add data", async () => {
-    await table.add([{ id: 1 }, { id: 2 }]);
-    await table.add([{ id: 1 }]);
-    await expect(table.countRows()).resolves.toBe(3);
-  });
-
-  it("should overwrite data if asked", async () => {
-    await table.add([{ id: 1 }, { id: 2 }]);
-    await table.add([{ id: 1 }], { mode: "overwrite" });
-    await expect(table.countRows()).resolves.toBe(1);
-  });
-
-  it("should let me close the table", async () => {
-    expect(table.isOpen()).toBe(true);
-    table.close();
-    expect(table.isOpen()).toBe(false);
-    expect(table.countRows()).rejects.toThrow("Table some_table is closed");
-  });
-
-  it("should let me update values", async () => {
-    await table.add([{ id: 1 }]);
-    expect(await table.countRows("id == 1")).toBe(1);
-    expect(await table.countRows("id == 7")).toBe(0);
-    await table.update({ id: "7" });
-    expect(await table.countRows("id == 1")).toBe(0);
-    expect(await table.countRows("id == 7")).toBe(1);
-    await table.add([{ id: 2 }]);
-    // Test Map as input
-    await table.update(new Map(Object.entries({ id: "10" })), {
-      where: "id % 2 == 0",
+    beforeEach(async () => {
+      tmpDir = tmp.dirSync({ unsafeCleanup: true });
+      const conn = await connect(tmpDir.name);
+      table = await conn.createEmptyTable("some_table", schema);
     });
-    expect(await table.countRows("id == 2")).toBe(0);
-    expect(await table.countRows("id == 7")).toBe(1);
-    expect(await table.countRows("id == 10")).toBe(1);
-  });
+    afterEach(() => tmpDir.removeCallback());
 
-  // https://github.com/lancedb/lancedb/issues/1293
-  test.each([new arrow.Float16(), new arrow.Float32(), new arrow.Float64()])(
-    "can create empty table with non default float type: %s",
-    async (floatType) => {
-      const db = await connect(tmpDir.name);
+    it("be displayable", async () => {
+      expect(table.display()).toMatch(
+        /NativeTable\(some_table, uri=.*, read_consistency_interval=None\)/,
+      );
+      table.close();
+      expect(table.display()).toBe("ClosedTable(some_table)");
+    });
 
-      const data = [
-        { text: "hello", vector: Array(512).fill(1.0) },
-        { text: "hello world", vector: Array(512).fill(1.0) },
-      ];
-      const f64Schema = new arrow.Schema([
-        new arrow.Field("text", new arrow.Utf8(), true),
-        new arrow.Field(
-          "vector",
-          new arrow.FixedSizeList(512, new arrow.Field("item", floatType)),
-          true,
-        ),
-      ]);
+    it("should let me add data", async () => {
+      await table.add([{ id: 1 }, { id: 2 }]);
+      await table.add([{ id: 1 }]);
+      await expect(table.countRows()).resolves.toBe(3);
+    });
 
-      const f64Table = await db.createEmptyTable("f64", f64Schema, {
-        mode: "overwrite",
+    it("should overwrite data if asked", async () => {
+      await table.add([{ id: 1 }, { id: 2 }]);
+      await table.add([{ id: 1 }], { mode: "overwrite" });
+      await expect(table.countRows()).resolves.toBe(1);
+    });
+
+    it("should let me close the table", async () => {
+      expect(table.isOpen()).toBe(true);
+      table.close();
+      expect(table.isOpen()).toBe(false);
+      expect(table.countRows()).rejects.toThrow("Table some_table is closed");
+    });
+
+    it("should let me update values", async () => {
+      await table.add([{ id: 1 }]);
+      expect(await table.countRows("id == 1")).toBe(1);
+      expect(await table.countRows("id == 7")).toBe(0);
+      await table.update({ id: "7" });
+      expect(await table.countRows("id == 1")).toBe(0);
+      expect(await table.countRows("id == 7")).toBe(1);
+      await table.add([{ id: 2 }]);
+      // Test Map as input
+      await table.update(new Map(Object.entries({ id: "10" })), {
+        where: "id % 2 == 0",
       });
-      try {
-        await f64Table.add(data);
-        const res = await f64Table.query().toArray();
-        expect(res.length).toBe(2);
-      } catch (e) {
-        expect(e).toBeUndefined();
-      }
-    },
-  );
+      expect(await table.countRows("id == 2")).toBe(0);
+      expect(await table.countRows("id == 7")).toBe(1);
+      expect(await table.countRows("id == 10")).toBe(1);
+    });
 
-  it("should return the table as an instance of an arrow table", async () => {
-    const arrowTbl = await table.toArrow();
-    expect(arrowTbl).toBeInstanceOf(ArrowTable);
-  });
-});
+    it("should let me update values with `values`", async () => {
+      await table.add([{ id: 1 }]);
+      expect(await table.countRows("id == 1")).toBe(1);
+      expect(await table.countRows("id == 7")).toBe(0);
+      await table.update({ values: { id: 7 } });
+      expect(await table.countRows("id == 1")).toBe(0);
+      expect(await table.countRows("id == 7")).toBe(1);
+      await table.add([{ id: 2 }]);
+      // Test Map as input
+      await table.update({
+        values: {
+          id: "10",
+        },
+        where: "id % 2 == 0",
+      });
+      expect(await table.countRows("id == 2")).toBe(0);
+      expect(await table.countRows("id == 7")).toBe(1);
+      expect(await table.countRows("id == 10")).toBe(1);
+    });
+
+    it("should let me update values with `valuesSql`", async () => {
+      await table.add([{ id: 1 }]);
+      expect(await table.countRows("id == 1")).toBe(1);
+      expect(await table.countRows("id == 7")).toBe(0);
+      await table.update({
+        valuesSql: {
+          id: "7",
+        },
+      });
+      expect(await table.countRows("id == 1")).toBe(0);
+      expect(await table.countRows("id == 7")).toBe(1);
+      await table.add([{ id: 2 }]);
+      // Test Map as input
+      await table.update({
+        valuesSql: {
+          id: "10",
+        },
+        where: "id % 2 == 0",
+      });
+      expect(await table.countRows("id == 2")).toBe(0);
+      expect(await table.countRows("id == 7")).toBe(1);
+      expect(await table.countRows("id == 10")).toBe(1);
+    });
+
+    // https://github.com/lancedb/lancedb/issues/1293
+    test.each([new arrow.Float16(), new arrow.Float32(), new arrow.Float64()])(
+      "can create empty table with non default float type: %s",
+      async (floatType) => {
+        const db = await connect(tmpDir.name);
+
+        const data = [
+          { text: "hello", vector: Array(512).fill(1.0) },
+          { text: "hello world", vector: Array(512).fill(1.0) },
+        ];
+        const f64Schema = new arrow.Schema([
+          new arrow.Field("text", new arrow.Utf8(), true),
+          new arrow.Field(
+            "vector",
+            new arrow.FixedSizeList(512, new arrow.Field("item", floatType)),
+            true,
+          ),
+        ]);
+
+        const f64Table = await db.createEmptyTable("f64", f64Schema, {
+          mode: "overwrite",
+        });
+        try {
+          await f64Table.add(data);
+          const res = await f64Table.query().toArray();
+          expect(res.length).toBe(2);
+        } catch (e) {
+          expect(e).toBeUndefined();
+        }
+      },
+    );
+
+    it("should return the table as an instance of an arrow table", async () => {
+      const arrowTbl = await table.toArrow();
+      expect(arrowTbl).toBeInstanceOf(ArrowTable);
+    });
+  },
+);
 
 describe("merge insert", () => {
   let tmpDir: tmp.DirResult;
@@ -271,6 +333,7 @@ describe("When creating an index", () => {
   const schema = new Schema([
     new Field("id", new Int32(), true),
     new Field("vec", new FixedSizeList(32, new Field("item", new Float32()))),
+    new Field("tags", new List(new Field("item", new Utf8(), true))),
   ]);
   let tbl: Table;
   let queryVec: number[];
@@ -286,6 +349,7 @@ describe("When creating an index", () => {
           vec: Array(32)
             .fill(1)
             .map(() => Math.random()),
+          tags: ["tag1", "tag2", "tag3"],
         })),
       {
         schema,
@@ -315,7 +379,7 @@ describe("When creating an index", () => {
       .query()
       .limit(2)
       .nearestTo(queryVec)
-      .distanceType("DoT")
+      .distanceType("dot")
       .toArrow();
     expect(rst.numRows).toBe(2);
 
@@ -366,6 +430,22 @@ describe("When creating an index", () => {
     for await (const r of tbl.query().filter("id > 1").select(["id"])) {
       expect(r.numRows).toBe(298);
     }
+  });
+
+  test("create a bitmap index", async () => {
+    await tbl.createIndex("id", {
+      config: Index.bitmap(),
+    });
+    const indexDir = path.join(tmpDir.name, "test.lance", "_indices");
+    expect(fs.readdirSync(indexDir)).toHaveLength(1);
+  });
+
+  test("create a label list index", async () => {
+    await tbl.createIndex("tags", {
+      config: Index.labelList(),
+    });
+    const indexDir = path.join(tmpDir.name, "test.lance", "_indices");
+    expect(fs.readdirSync(indexDir)).toHaveLength(1);
   });
 
   test("should be able to get index stats", async () => {
@@ -646,100 +726,183 @@ describe("when optimizing a dataset", () => {
     expect(stats.prune.bytesRemoved).toBeGreaterThan(0);
     expect(stats.prune.oldVersionsRemoved).toBe(3);
   });
+
+  it("delete unverified", async () => {
+    const version = await table.version();
+    const versionFile = `${tmpDir.name}/${table.name}.lance/_versions/${version - 1}.manifest`;
+    fs.rmSync(versionFile);
+
+    let stats = await table.optimize({ deleteUnverified: false });
+    expect(stats.prune.oldVersionsRemoved).toBe(0);
+
+    stats = await table.optimize({
+      cleanupOlderThan: new Date(),
+      deleteUnverified: true,
+    });
+    expect(stats.prune.oldVersionsRemoved).toBeGreaterThan(1);
+  });
 });
 
-describe("table.search", () => {
-  let tmpDir: tmp.DirResult;
-  beforeEach(() => {
-    tmpDir = tmp.dirSync({ unsafeCleanup: true });
-  });
-  afterEach(() => tmpDir.removeCallback());
+describe.each([arrow13, arrow14, arrow15, arrow16, arrow17])(
+  "when optimizing a dataset",
+  // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+  (arrow: any) => {
+    let tmpDir: tmp.DirResult;
+    beforeEach(() => {
+      getRegistry().reset();
+      tmpDir = tmp.dirSync({ unsafeCleanup: true });
+    });
+    afterEach(() => {
+      tmpDir.removeCallback();
+    });
 
-  test("can search using a string", async () => {
-    @register()
-    class MockEmbeddingFunction extends EmbeddingFunction<string> {
-      toJSON(): object {
-        return {};
-      }
-      ndims() {
-        return 1;
-      }
-      embeddingDataType(): arrow.Float {
-        return new Float32();
-      }
-
-      // Hardcoded embeddings for the sake of testing
-      async computeQueryEmbeddings(_data: string) {
-        switch (_data) {
-          case "greetings":
-            return [0.1];
-          case "farewell":
-            return [0.2];
-          default:
-            return null as never;
+    test("can search using a string", async () => {
+      @register()
+      class MockEmbeddingFunction extends EmbeddingFunction<string> {
+        toJSON(): object {
+          return {};
         }
-      }
+        ndims() {
+          return 1;
+        }
+        embeddingDataType() {
+          return new Float32();
+        }
 
-      // Hardcoded embeddings for the sake of testing
-      async computeSourceEmbeddings(data: string[]) {
-        return data.map((s) => {
-          switch (s) {
-            case "hello world":
+        // Hardcoded embeddings for the sake of testing
+        async computeQueryEmbeddings(_data: string) {
+          switch (_data) {
+            case "greetings":
               return [0.1];
-            case "goodbye world":
+            case "farewell":
               return [0.2];
             default:
               return null as never;
           }
-        });
+        }
+
+        // Hardcoded embeddings for the sake of testing
+        async computeSourceEmbeddings(data: string[]) {
+          return data.map((s) => {
+            switch (s) {
+              case "hello world":
+                return [0.1];
+              case "goodbye world":
+                return [0.2];
+              default:
+                return null as never;
+            }
+          });
+        }
       }
-    }
 
-    const func = new MockEmbeddingFunction();
-    const schema = LanceSchema({
-      text: func.sourceField(new arrow.Utf8()),
-      vector: func.vectorField(),
+      const func = new MockEmbeddingFunction();
+      const schema = LanceSchema({
+        text: func.sourceField(new arrow.Utf8()),
+        vector: func.vectorField(),
+      });
+      const db = await connect(tmpDir.name);
+      const data = [{ text: "hello world" }, { text: "goodbye world" }];
+      const table = await db.createTable("test", data, { schema });
+
+      const results = await table.search("greetings").toArray();
+      expect(results[0].text).toBe(data[0].text);
+
+      const results2 = await table.search("farewell").toArray();
+      expect(results2[0].text).toBe(data[1].text);
     });
-    const db = await connect(tmpDir.name);
-    const data = [{ text: "hello world" }, { text: "goodbye world" }];
-    const table = await db.createTable("test", data, { schema });
 
-    const results = await table.search("greetings").then((r) => r.toArray());
-    expect(results[0].text).toBe(data[0].text);
+    test("rejects if no embedding function provided", async () => {
+      const db = await connect(tmpDir.name);
+      const data = [
+        { text: "hello world", vector: [0.1, 0.2, 0.3] },
+        { text: "goodbye world", vector: [0.4, 0.5, 0.6] },
+      ];
+      const table = await db.createTable("test", data);
 
-    const results2 = await table.search("farewell").then((r) => r.toArray());
-    expect(results2[0].text).toBe(data[1].text);
+      expect(table.search("hello", "vector").toArray()).rejects.toThrow(
+        "No embedding functions are defined in the table",
+      );
+    });
+
+    test("full text search if no embedding function provided", async () => {
+      const db = await connect(tmpDir.name);
+      const data = [
+        { text: "hello world", vector: [0.1, 0.2, 0.3] },
+        { text: "goodbye world", vector: [0.4, 0.5, 0.6] },
+      ];
+      const table = await db.createTable("test", data);
+      await table.createIndex("text", {
+        config: Index.fts(),
+      });
+
+      const results = await table.search("hello").toArray();
+      expect(results[0].text).toBe(data[0].text);
+    });
+
+    test.each([
+      [0.4, 0.5, 0.599], // number[]
+      Float32Array.of(0.4, 0.5, 0.599), // Float32Array
+      Float64Array.of(0.4, 0.5, 0.599), // Float64Array
+    ])("can search using vectorlike datatypes", async (vectorlike) => {
+      const db = await connect(tmpDir.name);
+      const data = [
+        { text: "hello world", vector: [0.1, 0.2, 0.3] },
+        { text: "goodbye world", vector: [0.4, 0.5, 0.6] },
+      ];
+      const table = await db.createTable("test", data);
+
+      // biome-ignore lint/suspicious/noExplicitAny: test
+      const results: any[] = await table.search(vectorlike).toArray();
+
+      expect(results.length).toBe(2);
+      expect(results[0].text).toBe(data[1].text);
+    });
+  },
+);
+
+describe("when calling explainPlan", () => {
+  let tmpDir: tmp.DirResult;
+  let table: Table;
+  let queryVec: number[];
+  beforeEach(async () => {
+    tmpDir = tmp.dirSync({ unsafeCleanup: true });
+    const con = await connect(tmpDir.name);
+    table = await con.createTable("vectors", [{ id: 1, vector: [0.1, 0.2] }]);
   });
 
-  test("rejects if no embedding function provided", async () => {
-    const db = await connect(tmpDir.name);
-    const data = [
-      { text: "hello world", vector: [0.1, 0.2, 0.3] },
-      { text: "goodbye world", vector: [0.4, 0.5, 0.6] },
-    ];
-    const table = await db.createTable("test", data);
-
-    expect(table.search("hello")).rejects.toThrow(
-      "No embedding functions are defined in the table",
-    );
+  afterEach(() => {
+    tmpDir.removeCallback();
   });
 
-  test.each([
-    [0.4, 0.5, 0.599], // number[]
-    Float32Array.of(0.4, 0.5, 0.599), // Float32Array
-    Float64Array.of(0.4, 0.5, 0.599), // Float64Array
-  ])("can search using vectorlike datatypes", async (vectorlike) => {
-    const db = await connect(tmpDir.name);
-    const data = [
-      { text: "hello world", vector: [0.1, 0.2, 0.3] },
-      { text: "goodbye world", vector: [0.4, 0.5, 0.6] },
-    ];
-    const table = await db.createTable("test", data);
+  it("retrieves query plan", async () => {
+    queryVec = Array(2)
+      .fill(1)
+      .map(() => Math.random());
+    const plan = await table.query().nearestTo(queryVec).explainPlan(true);
 
-    // biome-ignore lint/suspicious/noExplicitAny: test
-    const results: any[] = await table.search(vectorlike).toArray();
+    expect(plan).toMatch("KNN");
+  });
+});
 
-    expect(results.length).toBe(2);
-    expect(results[0].text).toBe(data[1].text);
+describe("column name options", () => {
+  let tmpDir: tmp.DirResult;
+  let table: Table;
+  beforeEach(async () => {
+    tmpDir = tmp.dirSync({ unsafeCleanup: true });
+    const con = await connect(tmpDir.name);
+    table = await con.createTable("vectors", [
+      { camelCase: 1, vector: [0.1, 0.2] },
+    ]);
+  });
+
+  test("can select columns with different names", async () => {
+    const results = await table.query().select(["camelCase"]).toArray();
+    expect(results[0].camelCase).toBe(1);
+  });
+
+  test("can filter on columns with different names", async () => {
+    const results = await table.query().where("`camelCase` = 1").toArray();
+    expect(results[0].camelCase).toBe(1);
   });
 });

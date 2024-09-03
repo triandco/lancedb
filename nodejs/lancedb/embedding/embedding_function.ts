@@ -20,7 +20,7 @@ import {
   Float,
   Float32,
   type IntoVector,
-  isDataType,
+  Utf8,
   isFixedSizeList,
   isFloat,
   newVectorType,
@@ -35,6 +35,12 @@ export interface FunctionOptions {
   [key: string]: any;
 }
 
+export interface EmbeddingFunctionConstructor<
+  T extends EmbeddingFunction = EmbeddingFunction,
+> {
+  new (modelOptions?: T["TOptions"]): T;
+}
+
 /**
  * An embedding function that automatically creates vector representation for a given column.
  */
@@ -43,6 +49,12 @@ export abstract class EmbeddingFunction<
   T = any,
   M extends FunctionOptions = FunctionOptions,
 > {
+  /**
+   * @ignore
+   *  This is only used for associating the options type with the class for type checking
+   */
+  // biome-ignore lint/style/useNamingConvention: we want to keep the name as it is
+  readonly TOptions!: M;
   /**
    * Convert the embedding function to a JSON object
    * It is used to serialize the embedding function to the schema
@@ -70,6 +82,8 @@ export abstract class EmbeddingFunction<
    */
   abstract toJSON(): Partial<M>;
 
+  async init?(): Promise<void>;
+
   /**
    * sourceField is used in combination with `LanceSchema` to provide a declarative data model
    *
@@ -80,9 +94,10 @@ export abstract class EmbeddingFunction<
   sourceField(
     optionsOrDatatype: Partial<FieldOptions> | DataType,
   ): [DataType, Map<string, EmbeddingFunction>] {
-    let datatype = isDataType(optionsOrDatatype)
-      ? optionsOrDatatype
-      : optionsOrDatatype?.datatype;
+    let datatype =
+      "datatype" in optionsOrDatatype
+        ? optionsOrDatatype.datatype
+        : optionsOrDatatype;
     if (!datatype) {
       throw new Error("Datatype is required");
     }
@@ -108,15 +123,17 @@ export abstract class EmbeddingFunction<
     let dims: number | undefined = this.ndims();
 
     // `func.vectorField(new Float32())`
-    if (isDataType(optionsOrDatatype)) {
-      dtype = optionsOrDatatype;
+    if (optionsOrDatatype === undefined) {
+      dtype = new Float32();
+    } else if (!("datatype" in optionsOrDatatype)) {
+      dtype = sanitizeType(optionsOrDatatype);
     } else {
       // `func.vectorField({
       //  datatype: new Float32(),
       //  dims: 10
       // })`
       dims = dims ?? optionsOrDatatype?.dims;
-      dtype = optionsOrDatatype?.datatype;
+      dtype = sanitizeType(optionsOrDatatype?.datatype);
     }
 
     if (dtype !== undefined) {
@@ -170,10 +187,42 @@ export abstract class EmbeddingFunction<
   /**
   Compute the embeddings for a single query
  */
-  async computeQueryEmbeddings(data: T): Promise<IntoVector> {
+  async computeQueryEmbeddings(data: T): Promise<Awaited<IntoVector>> {
     return this.computeSourceEmbeddings([data]).then(
       (embeddings) => embeddings[0],
     );
+  }
+}
+
+/**
+ * an abstract class for implementing embedding functions that take text as input
+ */
+export abstract class TextEmbeddingFunction<
+  M extends FunctionOptions = FunctionOptions,
+> extends EmbeddingFunction<string, M> {
+  //** Generate the embeddings for the given texts */
+  abstract generateEmbeddings(
+    texts: string[],
+    // biome-ignore lint/suspicious/noExplicitAny: we don't know what the implementor will do
+    ...args: any[]
+  ): Promise<number[][] | Float32Array[] | Float64Array[]>;
+
+  async computeQueryEmbeddings(data: string): Promise<Awaited<IntoVector>> {
+    return this.generateEmbeddings([data]).then((data) => data[0]);
+  }
+
+  embeddingDataType(): Float {
+    return new Float32();
+  }
+
+  override sourceField(): [DataType, Map<string, EmbeddingFunction>] {
+    return super.sourceField(new Utf8());
+  }
+
+  computeSourceEmbeddings(
+    data: string[],
+  ): Promise<number[][] | Float32Array[] | Float64Array[]> {
+    return this.generateEmbeddings(data);
   }
 }
 

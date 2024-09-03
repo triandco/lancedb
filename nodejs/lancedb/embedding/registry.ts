@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { EmbeddingFunction } from "./embedding_function";
+import {
+  type EmbeddingFunction,
+  type EmbeddingFunctionConstructor,
+} from "./embedding_function";
 import "reflect-metadata";
+import { OpenAIEmbeddingFunction } from "./openai";
+import { TransformersEmbeddingFunction } from "./transformers";
 
-export interface EmbeddingFunctionOptions {
-  [key: string]: unknown;
-}
-
-export interface EmbeddingFunctionFactory<
-  T extends EmbeddingFunction = EmbeddingFunction,
-> {
-  new (modelOptions?: EmbeddingFunctionOptions): T;
-}
+type CreateReturnType<T> = T extends { init: () => Promise<void> }
+  ? Promise<T>
+  : T;
 
 interface EmbeddingFunctionCreate<T extends EmbeddingFunction> {
-  create(options?: EmbeddingFunctionOptions): T;
+  create(options?: T["TOptions"]): CreateReturnType<T>;
 }
 
 /**
@@ -36,7 +35,14 @@ interface EmbeddingFunctionCreate<T extends EmbeddingFunction> {
  * or TextEmbeddingFunction and registering it with the registry
  */
 export class EmbeddingFunctionRegistry {
-  #functions: Map<string, EmbeddingFunctionFactory> = new Map();
+  #functions = new Map<string, EmbeddingFunctionConstructor>();
+
+  /**
+   * Get the number of registered functions
+   */
+  length() {
+    return this.#functions.size;
+  }
 
   /**
    * Register an embedding function
@@ -44,7 +50,9 @@ export class EmbeddingFunctionRegistry {
    * @param func The function to register
    * @throws Error if the function is already registered
    */
-  register<T extends EmbeddingFunctionFactory = EmbeddingFunctionFactory>(
+  register<
+    T extends EmbeddingFunctionConstructor = EmbeddingFunctionConstructor,
+  >(
     this: EmbeddingFunctionRegistry,
     alias?: string,
     // biome-ignore lint/suspicious/noExplicitAny: <explanation>
@@ -65,21 +73,42 @@ export class EmbeddingFunctionRegistry {
     };
   }
 
+  get(name: "openai"): EmbeddingFunctionCreate<OpenAIEmbeddingFunction>;
+  get(
+    name: "huggingface",
+  ): EmbeddingFunctionCreate<TransformersEmbeddingFunction>;
+  get<T extends EmbeddingFunction<unknown>>(
+    name: string,
+  ): EmbeddingFunctionCreate<T> | undefined;
   /**
    * Fetch an embedding function by name
    * @param name The name of the function
    */
-  get<T extends EmbeddingFunction<unknown> = EmbeddingFunction>(
-    name: string,
-  ): EmbeddingFunctionCreate<T> | undefined {
+  get(name: string) {
     const factory = this.#functions.get(name);
     if (!factory) {
-      return undefined;
+      // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+      return undefined as any;
     }
+    // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+    let create: any;
+    if (factory.prototype.init) {
+      // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+      create = async function (options?: any) {
+        const instance = new factory(options);
+        await instance.init!();
+        return instance;
+      };
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+      create = function (options?: any) {
+        const instance = new factory(options);
+        return instance;
+      };
+    }
+
     return {
-      create: function (options: EmbeddingFunctionOptions) {
-        return new factory(options) as unknown as T;
-      },
+      create,
     };
   }
 
@@ -93,10 +122,10 @@ export class EmbeddingFunctionRegistry {
   /**
    * @ignore
    */
-  parseFunctions(
+  async parseFunctions(
     this: EmbeddingFunctionRegistry,
     metadata: Map<string, string>,
-  ): Map<string, EmbeddingFunctionConfig> {
+  ): Promise<Map<string, EmbeddingFunctionConfig>> {
     if (!metadata.has("embedding_functions")) {
       return new Map();
     } else {
@@ -104,27 +133,32 @@ export class EmbeddingFunctionRegistry {
         name: string;
         sourceColumn: string;
         vectorColumn: string;
-        model: EmbeddingFunctionOptions;
+        model: EmbeddingFunction["TOptions"];
       };
+
       const functions = <FunctionConfig[]>(
         JSON.parse(metadata.get("embedding_functions")!)
       );
-      return new Map(
-        functions.map((f) => {
+
+      const items: [string, EmbeddingFunctionConfig][] = await Promise.all(
+        functions.map(async (f) => {
           const fn = this.get(f.name);
           if (!fn) {
             throw new Error(`Function "${f.name}" not found in registry`);
           }
+          const func = await this.get(f.name)!.create(f.model);
           return [
             f.name,
             {
               sourceColumn: f.sourceColumn,
               vectorColumn: f.vectorColumn,
-              function: this.get(f.name)!.create(f.model),
+              function: func,
             },
           ];
         }),
       );
+
+      return new Map(items);
     }
   }
   // biome-ignore lint/suspicious/noExplicitAny: <explanation>

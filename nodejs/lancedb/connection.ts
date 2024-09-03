@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Table as ArrowTable, Data, Schema } from "./arrow";
+import { Data, Schema, SchemaLike, TableLike } from "./arrow";
 import { fromTableToBuffer, makeEmptyTable } from "./arrow";
 import { EmbeddingFunctionConfig, getRegistry } from "./embedding/registry";
 import { Connection as LanceDbConnection } from "./native";
@@ -45,12 +45,22 @@ export interface CreateTableOptions {
    */
   storageOptions?: Record<string, string>;
   /**
+   * The version of the data storage format to use.
+   *
+   * The default is `legacy`, which is Lance format v1.
+   * `stable` is the new format, which is Lance format v2.
+   */
+  dataStorageVersion?: string;
+
+  /**
    * If true then data files will be written with the legacy format
    *
    * The default is true while the new format is in beta
+   *
+   * Deprecated.
    */
   useLegacyFormat?: boolean;
-  schema?: Schema;
+  schema?: SchemaLike;
   embeddingFunction?: EmbeddingFunctionConfig;
 }
 
@@ -167,12 +177,12 @@ export abstract class Connection {
   /**
    * Creates a new Table and initialize it with new data.
    * @param {string} name - The name of the table.
-   * @param {Record<string, unknown>[] | ArrowTable} data - Non-empty Array of Records
+   * @param {Record<string, unknown>[] | TableLike} data - Non-empty Array of Records
    * to be inserted into the table
    */
   abstract createTable(
     name: string,
-    data: Record<string, unknown>[] | ArrowTable,
+    data: Record<string, unknown>[] | TableLike,
     options?: Partial<CreateTableOptions>,
   ): Promise<Table>;
 
@@ -183,7 +193,7 @@ export abstract class Connection {
    */
   abstract createEmptyTable(
     name: string,
-    schema: Schema,
+    schema: import("./arrow").SchemaLike,
     options?: Partial<CreateTableOptions>,
   ): Promise<Table>;
 
@@ -235,23 +245,31 @@ export class LocalConnection extends Connection {
     nameOrOptions:
       | string
       | ({ name: string; data: Data } & Partial<CreateTableOptions>),
-    data?: Record<string, unknown>[] | ArrowTable,
+    data?: Record<string, unknown>[] | TableLike,
     options?: Partial<CreateTableOptions>,
   ): Promise<Table> {
     if (typeof nameOrOptions !== "string" && "name" in nameOrOptions) {
       const { name, data, ...options } = nameOrOptions;
+
       return this.createTable(name, data, options);
     }
     if (data === undefined) {
       throw new Error("data is required");
     }
     const { buf, mode } = await Table.parseTableData(data, options);
+    let dataStorageVersion = "legacy";
+    if (options?.dataStorageVersion !== undefined) {
+      dataStorageVersion = options.dataStorageVersion;
+    } else if (options?.useLegacyFormat !== undefined) {
+      dataStorageVersion = options.useLegacyFormat ? "legacy" : "stable";
+    }
+
     const innerTable = await this.inner.createTable(
       nameOrOptions,
       buf,
       mode,
       cleanseStorageOptions(options?.storageOptions),
-      options?.useLegacyFormat,
+      dataStorageVersion,
     );
 
     return new LocalTable(innerTable);
@@ -259,7 +277,7 @@ export class LocalConnection extends Connection {
 
   async createEmptyTable(
     name: string,
-    schema: Schema,
+    schema: import("./arrow").SchemaLike,
     options?: Partial<CreateTableOptions>,
   ): Promise<Table> {
     let mode: string = options?.mode ?? "create";
@@ -275,6 +293,13 @@ export class LocalConnection extends Connection {
       metadata = registry.getTableMetadata([embeddingFunction]);
     }
 
+    let dataStorageVersion = "legacy";
+    if (options?.dataStorageVersion !== undefined) {
+      dataStorageVersion = options.dataStorageVersion;
+    } else if (options?.useLegacyFormat !== undefined) {
+      dataStorageVersion = options.useLegacyFormat ? "legacy" : "stable";
+    }
+
     const table = makeEmptyTable(schema, metadata);
     const buf = await fromTableToBuffer(table);
     const innerTable = await this.inner.createEmptyTable(
@@ -282,7 +307,7 @@ export class LocalConnection extends Connection {
       buf,
       mode,
       cleanseStorageOptions(options?.storageOptions),
-      options?.useLegacyFormat,
+      dataStorageVersion,
     );
     return new LocalTable(innerTable);
   }

@@ -1,5 +1,10 @@
 import { Schema } from "apache-arrow";
-import { Data, fromTableToStreamBuffer, makeEmptyTable } from "../arrow";
+import {
+  Data,
+  SchemaLike,
+  fromTableToStreamBuffer,
+  makeEmptyTable,
+} from "../arrow";
 import {
   Connection,
   CreateTableOptions,
@@ -15,8 +20,7 @@ export interface RemoteConnectionOptions {
   apiKey?: string;
   region?: string;
   hostOverride?: string;
-  connectionTimeout?: number;
-  readTimeout?: number;
+  timeout?: number;
 }
 
 export class RemoteConnection extends Connection {
@@ -28,13 +32,7 @@ export class RemoteConnection extends Connection {
 
   constructor(
     url: string,
-    {
-      apiKey,
-      region,
-      hostOverride,
-      connectionTimeout,
-      readTimeout,
-    }: RemoteConnectionOptions,
+    { apiKey, region, hostOverride, timeout }: RemoteConnectionOptions,
   ) {
     super();
     apiKey = apiKey ?? process.env.LANCEDB_API_KEY;
@@ -63,8 +61,7 @@ export class RemoteConnection extends Connection {
       this.#apiKey,
       this.#region,
       hostOverride,
-      connectionTimeout,
-      readTimeout,
+      timeout,
     );
   }
 
@@ -156,7 +153,7 @@ export class RemoteConnection extends Connection {
 
   async createEmptyTable(
     name: string,
-    schema: Schema,
+    schema: SchemaLike,
     options?: Partial<CreateTableOptions> | undefined,
   ): Promise<Table> {
     if (options?.mode) {
